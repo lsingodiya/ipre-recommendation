@@ -1,66 +1,60 @@
 import pandas as pd
-import boto3
-import io
+from pathlib import Path
 
 # --------------------------------------------------
-# Config
+# Local SageMaker Processing Paths
 # --------------------------------------------------
-BUCKET = "ipre-poc"
+CUSTOMERS_PATH = "/opt/ml/processing/input/customers/customer.csv"
+PRODUCTS_PATH  = "/opt/ml/processing/input/products/product.csv"
+INVOICES_PATH  = "/opt/ml/processing/input/invoices/invoice.csv"
 
-s3 = boto3.client("s3")
-
-
-# --------------------------------------------------
-# S3 helpers
-# --------------------------------------------------
-def read_csv_s3(key: str) -> pd.DataFrame:
-    obj = s3.get_object(Bucket=BUCKET, Key=key)
-    return pd.read_csv(obj["Body"])
+OUTPUT_PATH = "/opt/ml/processing/output/market_basket.csv"
 
 
-def write_csv_s3(df: pd.DataFrame, key: str):
-    buffer = io.StringIO()
-    df.to_csv(buffer, index=False)
-    s3.put_object(Bucket=BUCKET, Key=key, Body=buffer.getvalue())
-
-
-# --------------------------------------------------
-# Main
-# --------------------------------------------------
 def main():
 
-    print("Loading raw data...")
+    print("Loading input datasets from Processing container...")
 
-    invoices = read_csv_s3("raw/invoices/invoices.csv")
-    products = read_csv_s3("raw/products/products.csv")
-    customers = read_csv_s3("raw/customers/customers.csv")
+    customers = pd.read_csv(CUSTOMERS_PATH)
+    products  = pd.read_csv(PRODUCTS_PATH)
+    invoices  = pd.read_csv(INVOICES_PATH)
 
     print("Invoices:", len(invoices))
     print("Products:", len(products))
     print("Customers:", len(customers))
 
     # --------------------------------------------------
-    # 1. Normalize key types (VERY IMPORTANT)
+    # Normalize key types
     # --------------------------------------------------
     invoices["customer_id"] = invoices["customer_id"].astype(str)
-    invoices["product_id"] = invoices["product_id"].astype(str)
+    invoices["product_id"]  = invoices["product_id"].astype(str)
 
-    products["product_id"] = products["product_id"].astype(str)
+    products["product_id"]  = products["product_id"].astype(str)
     customers["customer_id"] = customers["customer_id"].astype(str)
 
     # --------------------------------------------------
-    # 2. Safe joins (LEFT ONLY)
+    # Joins
     # --------------------------------------------------
     df = (
         invoices
-        .merge(products, on="product_id", how="left")
-        .merge(customers, on="customer_id", how="left")
+        .merge(products,   on="product_id",  how="left")
+        .merge(customers,  on="customer_id", how="left")
     )
 
     print("After joins:", len(df))
 
+    # Log join match rates to surface data quality issues early
+    unmatched_products  = df["brand"].isna().sum()
+    unmatched_customers = df["region"].isna().sum()
+    if unmatched_products:
+        print(f"WARNING: {unmatched_products} invoice rows had no matching product")
+    if unmatched_customers:
+        print(f"WARNING: {unmatched_customers} invoice rows had no matching customer")
+
     # --------------------------------------------------
-    # 3. Fix categorical columns
+    # Categorical cleanup
+    # FIX: fillna BEFORE astype(str) — astype converts NaN to literal "nan"
+    # which then doesn't match fillna's NaN sentinel.
     # --------------------------------------------------
     cat_cols = [
         "region",
@@ -68,35 +62,36 @@ def main():
         "brand",
         "l2_category",
         "l3_category",
-        "functionality"
+        "functionality",
     ]
 
     for c in cat_cols:
         if c not in df.columns:
             df[c] = "Unknown"
-
-        df[c] = df[c].astype(str).fillna("Unknown")
+        df[c] = df[c].fillna("Unknown").astype(str)
 
     # --------------------------------------------------
-    # 4. Fix numeric columns
+    # Numeric cleanup
     # --------------------------------------------------
     df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce").fillna(0)
 
     # --------------------------------------------------
-    # 🔥 5. SAFE DATETIME HANDLING (FIXES YOUR ERROR)
+    # Date parsing
+    # FIX: use dt.tz_convert(None) to safely strip timezone info whether
+    # timestamps are tz-aware or tz-naive, avoiding TypeError on mixed columns.
     # --------------------------------------------------
-    df["invoice_date"] = pd.to_datetime(df["invoice_date"], errors="coerce")
-
-    # Remove timezone completely (critical fix)
-    df["invoice_date"] = df["invoice_date"].dt.tz_localize(None)
-
-    # Use current time for recency
-    latest_date = pd.Timestamp.now().tz_localize(None)
+    df["invoice_date"] = pd.to_datetime(df["invoice_date"], errors="coerce", utc=True)
+    df["invoice_date"] = df["invoice_date"].dt.tz_convert(None)
 
     # --------------------------------------------------
-    # 6. Build market basket features
+    # Recency calculation
+    # FIX: use dataset max date instead of wall-clock now() so that
+    # recency_days is reproducible across pipeline reruns and backfills.
     # --------------------------------------------------
-    print("Building market basket...")
+    latest_date = df["invoice_date"].max()
+    if pd.isnull(latest_date):
+        print("WARNING: No valid invoice dates found; recency_days will be 0")
+        latest_date = pd.Timestamp.now()
 
     grouped = (
         df.groupby(
@@ -108,9 +103,9 @@ def main():
                 "brand",
                 "l2_category",
                 "l3_category",
-                "functionality"
+                "functionality",
             ],
-            dropna=False
+            dropna=False,
         )
         .agg(
             purchase_frequency=("product_id", "count"),
@@ -118,28 +113,23 @@ def main():
             recency_days=(
                 "invoice_date",
                 lambda x: int((latest_date - x.max()).days)
-                if pd.notnull(x.max()) else 0
-            )
+                if pd.notnull(x.max()) else 0,
+            ),
         )
         .reset_index()
     )
 
-    print("Market basket rows:", len(grouped))
-
-    # --------------------------------------------------
-    # Safety check
-    # --------------------------------------------------
     if grouped.empty:
-        raise ValueError("Market basket is empty. Check raw data or joins.")
+        raise ValueError("Market basket is empty after aggregation")
 
     # --------------------------------------------------
-    # 7. Save output
+    # Save output
     # --------------------------------------------------
-    write_csv_s3(grouped, "processed/market_basket/market_basket.csv")
+    Path("/opt/ml/processing/output").mkdir(parents=True, exist_ok=True)
+    grouped.to_csv(OUTPUT_PATH, index=False)
 
-    print("✅ Market basket saved successfully")
+    print("Market basket created:", len(grouped))
 
 
-# --------------------------------------------------
 if __name__ == "__main__":
     main()
