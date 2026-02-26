@@ -1,32 +1,3 @@
-"""
-inference.py — SageMaker endpoint inference script for IPRE.
-
-Called by SageMaker serving container:
-  model_fn(model_dir)            — once at container startup
-  input_fn(request_body, ct)     — per request, parse body
-  predict_fn(input_data, model)  — per request, run inference
-  output_fn(prediction, accept)  — per request, serialize response
-
-Request  (JSON from Salesforce Lambda):
-  {"customer_id": "C00052"}
-  or for net-new customers:
-  {"customer_id": "C00999", "segment": "Southeast_Plumbing",
-   "purchase_vector": {"Valves": 10, "Plumbing Tools": 5}}
-
-Response:
-  {
-    "customer_id": "C00052",
-    "segment": "Southeast_Plumbing",
-    "cluster_id": "Southeast_Plumbing_2",
-    "source": "precomputed",
-    "recommendations": [
-      {"rank": 1, "product_id": "P00144", "trigger_product": "P00142",
-       "score": 0.1255, "recommended_qty": 24,
-       "reason": "P00142 -> P00144 (support=0.1, confidence=0.17)"}
-    ]
-  }
-"""
-
 import io
 import json
 import os
@@ -42,11 +13,10 @@ RECO_KEY    = os.environ.get("RECO_KEY",    "final/recommendations.csv")
 
 
 # ==========================================================
-# model_fn — called ONCE at container startup
+# model_fn — load models once at container startup
 # ==========================================================
 
 def model_fn(model_dir: str) -> dict:
-    """Load all KMeans models + precomputed recommendations table."""
     model_dir = Path(model_dir)
     print(f"Loading models from: {model_dir}")
 
@@ -59,13 +29,16 @@ def model_fn(model_dir: str) -> dict:
 
     models = {}
     for segment, meta in registry.items():
-        with open(model_dir / meta["model_file"],  "rb") as f: kmeans = pickle.load(f)
-        with open(model_dir / meta["scaler_file"], "rb") as f: scaler = pickle.load(f)
-        with open(model_dir / meta["cols_file"])         as f: cols   = json.load(f)
+        with open(model_dir / meta["model_file"],  "rb") as f:
+            kmeans = pickle.load(f)
+        with open(model_dir / meta["scaler_file"], "rb") as f:
+            scaler = pickle.load(f)
+        with open(model_dir / meta["cols_file"]) as f:
+            cols = json.load(f)
 
         models[segment] = {
-            "kmeans":       kmeans,
-            "scaler":       scaler,
+            "kmeans": kmeans,
+            "scaler": scaler,
             "feature_cols": cols,
         }
 
@@ -91,7 +64,7 @@ def _load_recommendations() -> pd.DataFrame:
 
 
 # ==========================================================
-# input_fn
+# input_fn — parse JSON
 # ==========================================================
 
 def input_fn(request_body: str, content_type: str = "application/json") -> dict:
@@ -101,22 +74,21 @@ def input_fn(request_body: str, content_type: str = "application/json") -> dict:
 
 
 # ==========================================================
-# predict_fn — called per request
+# SINGLE RECORD PREDICTION (your original logic)
 # ==========================================================
 
-def predict_fn(input_data: dict, model: dict) -> dict:
+def _predict_one(input_data: dict, model: dict) -> dict:
+
     customer_id     = str(input_data.get("customer_id", "")).strip()
     segment         = input_data.get("segment", "").strip()
     purchase_vector = input_data.get("purchase_vector", None)
 
     if not customer_id:
-        raise ValueError("Request must include 'customer_id'")
+        return {"error": "Missing customer_id"}
 
     reco_df = model["reco_df"]
 
-    # --------------------------------------------------
-    # PATH 1: Precomputed lookup — primary path for existing customers
-    # --------------------------------------------------
+    # -------- PATH 1: Precomputed recommendations --------
     if not reco_df.empty:
         cust_recs = reco_df[reco_df["customer_id"] == customer_id]
         if not cust_recs.empty:
@@ -136,35 +108,26 @@ def predict_fn(input_data: dict, model: dict) -> dict:
                 "recommendations": recs,
             }
 
-    # --------------------------------------------------
-    # PATH 2: Real-time cluster assignment for net-new customers
-    # Requires 'segment' + 'purchase_vector' in the request
-    # --------------------------------------------------
+    # -------- PATH 2: Real-time assignment --------
     if not segment:
         return {
             "customer_id": customer_id,
-            "error": (
-                "Customer not found in precomputed recommendations. "
-                "Provide 'segment' and 'purchase_vector' for real-time assignment."
-            ),
+            "error": "Customer not found. Provide 'segment' and 'purchase_vector'.",
         }
 
     if not purchase_vector:
         return {
             "customer_id": customer_id,
             "segment": segment,
-            "error": "Provide 'purchase_vector' for real-time cluster assignment.",
+            "error": "Provide 'purchase_vector'.",
         }
 
     seg_model = model["models"].get(segment)
     if seg_model is None:
         return {
             "customer_id": customer_id,
-            "segment":     segment,
-            "error": (
-                f"No trained model for segment '{segment}'. "
-                f"Available: {list(model['models'].keys())}"
-            ),
+            "segment": segment,
+            "error": f"No trained model for segment '{segment}'",
         }
 
     feature_cols  = seg_model["feature_cols"]
@@ -179,16 +142,42 @@ def predict_fn(input_data: dict, model: dict) -> dict:
         "cluster_id":      cluster_id,
         "source":          "realtime_assignment",
         "recommendations": [],
-        "message": (
-            f"Customer assigned to cluster {cluster_id}. "
-            "Precomputed recommendations available after next pipeline run."
-        ),
     }
 
 
 # ==========================================================
-# output_fn
+# predict_fn — NOW supports batch + single
 # ==========================================================
 
-def output_fn(prediction: dict, accept: str = "application/json") -> str:
+def predict_fn(input_data: dict, model: dict):
+
+    # -------- BATCH --------
+    if "instances" in input_data and isinstance(input_data["instances"], list):
+
+        outputs = []
+
+        for item in input_data["instances"]:
+            try:
+                result = _predict_one(item, model)
+            except Exception as e:
+                result = {
+                    "customer_id": item.get("customer_id", "UNKNOWN"),
+                    "error": str(e)
+                }
+
+            outputs.append(result)
+
+        return {"predictions": outputs}
+
+    # -------- SINGLE --------
+    return _predict_one(input_data, model)
+
+
+# ==========================================================
+# output_fn — serialize response
+# ==========================================================
+
+def output_fn(prediction, accept="application/json"):
+    if accept != "application/json":
+        raise ValueError("Unsupported accept type")
     return json.dumps(prediction, default=str)
