@@ -1,0 +1,242 @@
+{
+  "repo_notes": [
+    {
+      "content": ""
+    }
+  ],
+  "pages": [
+    {
+      "title": "IPRE — Intelligent Product Recommendation Engine: Overview",
+      "purpose": "High-level introduction to the IPRE system: what it does, who uses it, the technology stack, POC results, and how the six-step SageMaker pipeline fits together. Links to all child sections for deeper detail.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "System Architecture and Data Flow",
+      "purpose": "Describes the end-to-end architecture: S3-bucket layout, the six-step DAG, instance types per step, inter-step data dependencies (model.tar.gz passing, ProcessingInput wiring), and the Salesforce/Einstein Co-Pilot integration surface.",
+      "parent": "IPRE — Intelligent Product Recommendation Engine: Overview",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Getting Started: Setup, Configuration, and Running the Pipeline",
+      "purpose": "Practical guide for onboarding engineers: prerequisites, AWS IAM/role requirements, how to run pipeline.py, how to trigger via SageMaker Studio or CLI, how to deploy the endpoint with deploy_endpoint.py, and the test.py quick-start script.",
+      "parent": "IPRE — Intelligent Product Recommendation Engine: Overview",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Data Layer: Inputs, Schema, and Dataset Generation",
+      "purpose": "Overview of all data inputs consumed by IPRE — raw CSVs, feedback file, and the synthetic dataset generator. Links to child pages covering schema details and dataset generation.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Raw Data Schemas: Customers, Products, and Invoices",
+      "purpose": "Detailed column-by-column reference for customers.csv, products.csv, and invoices.csv. Covers data types, FK relationships, the product category hierarchy (L2/L3), and the optional feedback.csv schema.",
+      "parent": "Data Layer: Inputs, Schema, and Dataset Generation",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Synthetic Dataset Generator (generate_realistic_dataset.py)",
+      "purpose": "Explains how the realistic test dataset is generated: region/end-use weighted distributions, trade-specific purchasing patterns, product catalog structure (15 L2 categories, 80+ L3 sub-categories), seasonal invoice biasing, and how to regenerate the dataset.",
+      "parent": "Data Layer: Inputs, Schema, and Dataset Generation",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Pipeline Steps: Core Processing Logic",
+      "purpose": "Overview of the six SageMaker pipeline steps, their execution order, and shared design patterns (environment variable injection via make_processor, tar.gz artifact passing, SageMaker path conventions). Links to child pages for each step.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Step 1 — Market Basket Creation (market_basket.py)",
+      "purpose": "Deep dive into market_basket.py: data ingestion and join logic, dynamic reference date, recency cutoff filtering, MIN_ORDER_COUNT filter, customer×product aggregation, RFM score computation and min-max normalisation, price band assignment, and the in_stock pass-through. Covers output schema of market_basket.csv.",
+      "parent": "Pipeline Steps: Core Processing Logic",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Step 2 — Customer Clustering (train_clustering.py and clustering.py)",
+      "purpose": "Covers both the production training script (train_clustering.py) and the simpler prototype (clustering.py). Topics: proportion-based feature engineering, the four feature groups (l2_qty, brand, functionality, rfm), StandardScaler, elbow-method k selection, silhouette scoring, per-segment artifact serialisation (pkl + json), model_registry.json, and customer_clusters.csv output. Explains why customer_clusters.csv is embedded in model.tar.gz.",
+      "parent": "Pipeline Steps: Core Processing Logic",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Step 3 — Model Registry (ClusteringRegister ModelStep)",
+      "purpose": "Explains the SageMaker Model Registry integration: the ipre-clustering-models Model Package Group, ModelApprovalStatus gating, version history, and how deploy_endpoint.py consumes the latest approved model.",
+      "parent": "Pipeline Steps: Core Processing Logic",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Step 4 — Association Rule Mining (associations.py)",
+      "purpose": "Deep dive into associations.py: basket session construction, data-driven WINDOW_DAYS computation, global_basket_id design (and the confidence>1 bug it fixes), time-decayed support with DECAY_LAMBDA, metric definitions (support, confidence, lift, weighted_support), adaptive proportional frequency filtering, and the associations.csv output schema.",
+      "parent": "Pipeline Steps: Core Processing Logic",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Step 5 — Recommendation Ranking (ranking.py)",
+      "purpose": "Deep dive into ranking.py: composite score formula (W_CONF, W_SUPP, W_LIFT, W_RECENCY), lift normalisation with MAX_LIFT_NORMALISE, L3 tiebreak bonus, in-stock and already-purchased filters, the category-aware fallback for cold-start customers, quantity lookup (qty_lookup), deduplication and final TOP_K truncation, and the recommendations.csv output schema.",
+      "parent": "Pipeline Steps: Core Processing Logic",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Step 6 — Feedback Calibration (feedback.py)",
+      "purpose": "Deep dive into feedback.py: loading feedback from S3 via boto3 (and why it is not a ProcessingInput), weight resolution hierarchy (High/Medium/Low + reason codes), score adjustment formula, SCORE_CUTOFF filtering, TOP_K re-ranking, feedback_summary.json generation, and the threshold learning loop (acceptance rate → MIN_CONFIDENCE suggestions).",
+      "parent": "Pipeline Steps: Core Processing Logic",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Pipeline Orchestration and Configuration",
+      "purpose": "Covers pipeline.py as the orchestration layer: PipelineSession, make_processor helper, all 32 ParameterString definitions, why all parameters are strings, step dependency wiring, and EventBridge scheduling. Links to child pages for parameter reference and design decisions.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Pipeline Parameters — Complete Reference",
+      "purpose": "Full reference table for all 32 pipeline parameters grouped by category (Data Inputs, Market Basket, Clustering, Association Mining, Ranking & Scoring, Feedback Calibration). Includes defaults, types, and tuning guidance.",
+      "parent": "Pipeline Orchestration and Configuration",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Key Design Decisions and Bug History",
+      "purpose": "Documents the architectural rationale behind non-obvious choices: why proportions over raw quantities, why the elbow method over sqrt(n), why lift matters, why global_basket_id is needed, why all parameters are ParameterString, why feedback uses boto3 not ProcessingInput. Also covers the full bug-fix log from POC development.",
+      "parent": "Pipeline Orchestration and Configuration",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Inference Endpoint and Salesforce Integration",
+      "purpose": "Overview of the real-time serving layer: the SageMaker endpoint, inference.py hybrid retrieval strategy, and the Salesforce Einstein Co-Pilot integration. Links to child pages for inference internals and deployment.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Inference Script (inference.py) — Precomputed and Real-Time Paths",
+      "purpose": "Detailed walkthrough of inference.py: model_fn startup (model_registry.json loading, pickle deserialisation, S3 recommendations cache), input_fn/predict_fn/output_fn SageMaker interface, the precomputed lookup path vs. real-time KMeans assignment path, batch mode via instances key, and error handling for missing S3 files.",
+      "parent": "Inference Endpoint and Salesforce Integration",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Endpoint Deployment (deploy_endpoint.py) and Salesforce Integration",
+      "purpose": "Covers deploy_endpoint.py: finding the latest approved model from the registry, creating/updating the ipre-prod-poc-endpoint, wait-for-InService polling, dry-run mode. Also covers the Salesforce Named Credential REST action, Einstein Co-Pilot surface, and the JSON request/response contract.",
+      "parent": "Inference Endpoint and Salesforce Integration",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Validation, Testing, and Results Analysis",
+      "purpose": "Overview of the validation and quality-assurance layer for IPRE recommendations. Links to child pages covering automated checks, human-readable enrichment, and POC results.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Automated Validation (scripts/validate_recommendations.py)",
+      "purpose": "Covers the automated integrity checks in validate_recommendations.py: schema validation, TOP_K quantity enforcement, already-purchased exclusion check, segment isolation validation, support/confidence threshold gates, and the fail-fast error interface.",
+      "parent": "Validation, Testing, and Results Analysis",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Human-Readable Enrichment and Salesperson Reports (Validate-recommendations.py)",
+      "purpose": "Covers the enrichment script Validate-recommendations.py: multi-way joins to add product names and customer metadata, the business sense check (end_use to expected category mapping), quality scoring (High/Medium/Low buckets), salesperson_report.csv generation with 'Why' column, and the three output files.",
+      "parent": "Validation, Testing, and Results Analysis",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "POC Results and Monitoring",
+      "purpose": "Summarises the February 2026 POC results: coverage metrics, lift/confidence ranges, segment and cluster counts. Covers CloudWatch monitoring, feedback_summary.json observability, and known limitations and next steps.",
+      "parent": "Validation, Testing, and Results Analysis",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    },
+    {
+      "title": "Glossary",
+      "purpose": "Definitions of all codebase-specific terms, abbreviations, algorithm names, and domain concepts that an onboarding engineer needs to understand IPRE. Each entry includes code pointers.",
+      "page_notes": [
+        {
+          "content": ""
+        }
+      ]
+    }
+  ]
+}
